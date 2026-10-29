@@ -12,20 +12,30 @@ without Vault. Use an image built from app 0.4.4 or later for assignment-based a
 - [All stack fields and examples](deploy/oci-resource-manager/FIELD-REFERENCE.md)
 - [Deployment permissions and operations](deploy/oci-resource-manager/DEPLOYMENT-DETAILS.md)
 
-## Local health/UI inspection
+## OCI VM deployment with Docker Compose
+
+`docker-compose.oci.yml` runs the HTTPS app and a separate report worker on a
+manually configured OCI VM. Resource Manager does not use this file; use the
+[stack deployment guide](deploy/oci-resource-manager/README.md) for automated provisioning.
+
+Before starting, configure the IAM client/callback and MFA policy, required
+`APP_BIND_ADDRESS`, `APP_PUBLIC_URL`, `APP_OIDC_DOMAIN_URL`, `APP_OIDC_ISSUER`,
+`APP_OIDC_CLIENT_ID` and `APP_OIDC_ALLOWED_SUBJECTS` values. Mount the protected
+files `app_secret`, `oidc_client_secret`, `backend_key` and `backend_cert` under
+`/opt/benchmark/secrets`. Use the VM's private bind address and restrict network
+access to the load balancer. This Compose configuration uses the explicit subject
+allowlist; Resource Manager defaults to IAM application assignments.
+
+From the repository root:
 
 ```bash
 cd apps/benchmark-control
-export APP_SECRET="$(openssl rand -base64 32)"
-docker compose up --build
+docker compose -f docker-compose.oci.yml up --build -d
 ```
 
-Open `http://localhost:18080` unless you set a different `APP_PORT`. Local Compose
-binds to loopback and sign-in is disabled by default. A usable browser session
-requires OCI IAM configuration and the configured HTTPS origin; there is no
-passwordless local-session endpoint or public self-registration.
-
-The image builds directly from `python:3.12-slim`; no pre-existing local base image is required. For a standalone build, run `docker build -t ai-benchmark-app:local apps/benchmark-control` from the repository root. The build accepts `APP_BASE` as an explicit override.
+The app serves HTTPS on port 443. There is no default `docker-compose.yml`;
+always specify `-f docker-compose.oci.yml`. The image builds from
+`python:3.12-slim`; `APP_BASE` can override the build base.
 
 ## What This Version Does
 
@@ -139,17 +149,17 @@ The **Reports** tab queues MLCommons-style offline report collections with four 
 
 Docker Compose starts a dedicated `report-worker` service using the shared data volume. Single-process local development defaults to an independent embedded reporting thread. Reports use immutable evidence snapshots and do not require live benchmark VMs. Restart existing inference runtimes after upgrading before running new benchmarks: serving-model/precision matching is now required.
 
-See [Reports module](docs/reporting.md) for usage, queue recovery, artifact storage, API endpoints and measurement limitations. Native timing is not independently validated by this first version; reconstructed throughput is withheld.
+Native timing is not independently validated by this first version; reconstructed throughput is withheld.
 
 ## Kernel tracing (0.3.1)
 
 Save a separate runtime profile with **Enable kernel tracing (diagnostic only)** checked, restart the runtime with that profile, then use **Capture Kernel Trace**. Select its `trace_runtime` job in **Queue** to download the worker traces, execution log and operator summary. Tracing defaults to off and trace-enabled profiles cannot run performance benchmarks. See [Kernel tracing](docs/kernel-tracing.md) for the capture sequence, evidence interpretation and limits.
 
-Completed reports can be archived automatically to a private OCI Object Storage bucket with verified checksums and expiring download links that work while the app is off. See [private OCI report archive configuration](docs/reporting.md#private-oci-report-archive).
+Completed reports can be archived automatically to a private OCI Object Storage bucket with verified checksums and expiring download links that work while the app is off. Configure archiving through the Resource Manager stack inputs.
 
 ## Integrated workspace UI
 
-The RFP-inspired navy and mint workspace preserves the desktop sidebar and mobile navigation. Runtime and benchmark forms expose kernel tracing and trace concurrency; the job queue includes trace ZIP downloads. Generated report cards show archive status, retry controls when available, local ZIP/CSV/JSON downloads, and independent Object Storage links. Local report downloads remain available when archiving fails. See [kernel tracing](docs/kernel-tracing.md) and [report archiving](docs/reporting.md) for configuration and evidence rules.
+The RFP-inspired navy and mint workspace preserves the desktop sidebar and mobile navigation. Runtime and benchmark forms expose kernel tracing and trace concurrency; the job queue includes trace ZIP downloads. Generated report cards show archive status, retry controls when available, local ZIP/CSV/JSON downloads, and independent Object Storage links. Local report downloads remain available when archiving fails. See [kernel tracing](docs/kernel-tracing.md) for tracing configuration.
 
 ## CPU memory budget (0.3.2)
 

@@ -69,3 +69,6 @@ Thumbs.db
 *~
 *.swp
 *.swo
+
+# Local reference documentation excluded from the user distribution.
+/apps/benchmark-control/docs/reporting.md

@@ -37,7 +37,6 @@ valid network/IAM configuration and access to the selected image repository.
 - [Deployment details, permissions and troubleshooting](apps/benchmark-control/deploy/oci-resource-manager/DEPLOYMENT-DETAILS.md)
 - [Application usage and local development](apps/benchmark-control/README.md)
 - [VM provisioning](apps/benchmark-control/docs/vm-provisioning.md)
-- [Reports and Object Storage archive](apps/benchmark-control/docs/reporting.md)
 
 App data uses ephemeral storage. Back up data and preserve the application
 encryption key before replacing an existing container. Object Storage report
