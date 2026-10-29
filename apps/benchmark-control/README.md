@@ -2,23 +2,34 @@
 
 Initial containerized control plane for OCI VM provisioning, SSH-based vLLM setup, and benchmark execution on Ubuntu hosts.
 
-## Run Locally
+## Deploy on OCI
+
+Start with the [Resource Manager deployment guide](deploy/oci-resource-manager/README.md).
+It walks through the required inputs, Plan/Apply, IAM user assignment and first sign-in.
+The defaults use HTTPS on 443, a Network Load Balancer and private configuration
+without Vault. Use an image built from app 0.4.4 or later for assignment-based access.
+
+- [All stack fields and examples](deploy/oci-resource-manager/FIELD-REFERENCE.md)
+- [Deployment permissions and operations](deploy/oci-resource-manager/DEPLOYMENT-DETAILS.md)
+
+## Local health/UI inspection
 
 ```bash
 cd apps/benchmark-control
 export APP_SECRET="$(openssl rand -base64 32)"
-export APP_LOCAL_USER_EMAIL="operator@example.com"
 docker compose up --build
 ```
 
-Open `http://localhost:18080` unless you set a different `APP_PORT`.
+Open `http://localhost:18080` unless you set a different `APP_PORT`. Local Compose
+binds to loopback and sign-in is disabled by default. A usable browser session
+requires OCI IAM configuration and the configured HTTPS origin; there is no
+passwordless local-session endpoint or public self-registration.
 
-The image builds directly from `python:3.12-slim`; no pre-existing local base image is required. For a standalone build, run `docker build -t ai-benchmark-app:local apps/benchmark-control` from the repository root. The build still accepts `BASE_IMAGE` as an explicit override.
+The image builds directly from `python:3.12-slim`; no pre-existing local base image is required. For a standalone build, run `docker build -t ai-benchmark-app:local apps/benchmark-control` from the repository root. The build accepts `APP_BASE` as an explicit override.
 
 ## What This Version Does
 
-- Registers and logs in multiple users.
-- Starts a local UI session automatically for the configured `APP_LOCAL_USER_EMAIL`.
+- Signs in users/groups assigned to the integrated IAM app through an OCI IAM Identity Domain confidential application with an MFA sign-on policy.
 - Provides an Authentication tab with OCI user-profile and instance-principal validation modes through the OCI Python SDK.
 - Stores validated OCI auth profiles per local user for later compartment, image, VCN, subnet, launch, and destroy operations.
 - Lets the VM workflow choose which saved OCI auth profile should load compartments, networks, images, and launch requests.
@@ -74,11 +85,11 @@ See [docs/vm-provisioning.md](docs/vm-provisioning.md) for lifecycle and cleanup
 - Unit tests pass inside the image.
 - The app runs locally as `aig-benchmark-control-dev`.
 - API health endpoint returns `{"status":"ok"}`.
-- Local UI session bootstrap works without register/login.
+- The former local bootstrap has been removed; IAM security regression tests cover the replacement sign-in flow.
 - Authentication validation endpoint returns explicit OCI Python SDK auth results.
 - User Profile validation requires an explicit OCI config profile header and uploaded matching private key.
-- Registration, login, VM profile creation, vLLM profile creation, ownership rejection, queued job processing, and failed benchmark report rejection were tested against the running container.
-- A real OCI VM lifecycle, vLLM/GuideLLM run, report generation, private Object Storage archive, and matching local/browser/object downloads were validated on 23 October 2026; see [integration smoke evidence](docs/integration-smoke-2026-10-23.md) for the exact scope and limitations.
+- Previous integration checks covered VM/profile creation, ownership rejection, queued job processing and report rejection. The new IAM/Resource Manager deployment still requires live acceptance checks.
+- Historical deployment smoke reports are local-only and excluded from Git. Use the [stack validation guide](deploy/oci-resource-manager/DEPLOYMENT-DETAILS.md#validation) and perform deployment/login/archive acceptance checks in your own tenancy.
 
 ## Model precision
 
@@ -173,8 +184,8 @@ those copies. Other users with the same VM account or root access can read its
 credential file. Preserve `APP_SECRET` to decrypt saved app credentials after a
 restart. Database backups contain encrypted credentials and require protection.
 
-Use HTTPS or a trusted tunnel before entering a token: the current public HTTP
-access mode does not encrypt browser-to-app traffic. The GUI displays a reminder
+Use the packaged HTTPS deployment before entering a token. Local diagnostic
+HTTP access is restricted to loopback and does not support IAM browser sign-in. The GUI displays a reminder
 on non-local HTTP connections; password masking and database encryption do not
 provide transport encryption.
 
@@ -183,3 +194,8 @@ API: optional write-only `hf_token` on `POST /api/vllm-profiles`, and owner-only
 `{"hf_token":null}` to clear. Listing returns only `hf_token_configured`.
 
 Reference: [Hugging Face environment variables](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables).
+
+OCI stack access defaults to IAM application assignments: after Apply, assign
+users/groups in the generated integrated application. No subject-list update or
+container redeployment is needed for each new user. See the deployment details' access
+management section for session expiry and upgrade requirements.

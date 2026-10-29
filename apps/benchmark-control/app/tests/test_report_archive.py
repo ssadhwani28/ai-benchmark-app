@@ -4,7 +4,7 @@ import os
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import Mock, patch
-from app.report_archive import FILES, archive_report, download_link
+from app.report_archive import FILES, archive_report, download_link, configuration
 from app.tests.test_reporting import ReportTestCase
 
 class ArchiveTests(ReportTestCase):
@@ -17,6 +17,7 @@ class ArchiveTests(ReportTestCase):
         objects = {}; client = Mock()
         client.get_namespace.return_value.data = 'namespace'
         client.get_bucket.return_value.data.public_access_type = 'NoPublicAccess'
+        client.get_bucket.return_value.data.storage_tier = 'Standard'
         def put(ns,bucket,name,stream,**kwargs):
             objects[name] = stream.read()
             self.assertEqual(hashlib.sha256(objects[name]).digest(), __import__('base64').b64decode(kwargs['opc_content_sha256']))
@@ -68,6 +69,30 @@ class ArchiveTests(ReportTestCase):
         self.db.execute("UPDATE report_jobs SET archive_status='uploading',archive_token='old',archive_lease_until=0,archive_attempts=1 WHERE id=?",(job['id'],))
         with patch('app.report_archive.archive_report',side_effect=expire_and_reclaim): self.worker.archive_one()
         self.assertEqual(self.db.one('SELECT archive_metadata FROM report_jobs WHERE id=?',(job['id'],))['archive_metadata'],'{}')
+
+    def test_configuration_defaults_to_deployment_region_and_validates_expiry(self):
+        with patch.dict(os.environ, {"APP_REPORT_ARCHIVE_BUCKET":"reports", "OCI_REGION":"eu-frankfurt-1"}, clear=True):
+            self.assertEqual(configuration()['region'], 'eu-frankfurt-1')
+            self.assertEqual(configuration()['link_hours'], 168)
+            self.assertTrue(configuration()['enabled'])
+            for value in ('0', '8761', '1.5'):
+                with patch.dict(os.environ, APP_REPORT_ARCHIVE_LINK_HOURS=value):
+                    with self.assertRaises(ValueError): configuration()
+
+    @patch.dict(os.environ, {'APP_REPORT_ARCHIVE_BUCKET':'benchmark','APP_REPORT_ARCHIVE_REGION':'eu-frankfurt-1','APP_REPORT_ARCHIVE_NAMESPACE':'provided-namespace'})
+    def test_archive_uses_supplied_namespace_and_region(self):
+        job, root = self.bundle(); client, _ = self.storage()
+        metadata = archive_report(root, job, client)
+        self.assertEqual(metadata['region'], 'eu-frankfurt-1')
+        self.assertEqual(metadata['namespace'], 'provided-namespace')
+        client.get_namespace.assert_not_called()
+
+    @patch.dict(os.environ, {'APP_REPORT_ARCHIVE_BUCKET':'benchmark'})
+    def test_cold_tier_rejected_without_upload(self):
+        job, root = self.bundle(); client, _ = self.storage()
+        client.get_bucket.return_value.data.storage_tier = 'Archive'
+        with self.assertRaisesRegex(RuntimeError, 'Standard'): archive_report(root, job, client)
+        client.put_object.assert_not_called()
 
     def test_link_is_single_object_read_only_and_expiring(self):
         fake_oci = NS(object_storage=NS(models=NS(CreatePreauthenticatedRequestDetails=lambda **kw:NS(**kw))))

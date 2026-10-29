@@ -179,7 +179,15 @@ Local generation and cloud archival have separate status: a cloud failure never
 removes a local report. With archiving configured, the worker also backfills
 existing completed reports whose local bundles remain available.
 
-Set these variables on **both the API and report worker** before deployment:
+The Resource Manager form now provides enablement, create/use-existing bucket,
+bucket name, compartment/region and download-link expiry inputs. It wires both
+the API and embedded report worker and the bucket-scoped permissions automatically.
+Its default private configuration volume requires no Vault/key; optional Vault
+delivery reuses existing resources and creates no new Vault. The Reports page
+shows the effective destination and whether automatic archiving is configured.
+See the [stack guide](../deploy/oci-resource-manager/DEPLOYMENT-DETAILS.md#report-archive-inputs-and-behavior).
+
+For manual/Compose deployments, set these variables on **both the API and report worker** before deployment:
 
 ```sh
 APP_REPORT_ARCHIVE_BUCKET=benchmark

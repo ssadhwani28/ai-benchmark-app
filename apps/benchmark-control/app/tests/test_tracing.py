@@ -1,4 +1,5 @@
 """Kernel tracing opt-in, cleanup, bounded evidence collection and API ownership."""
+from app.tests.security_fixtures import add_session, iam_settings
 import base64
 from dataclasses import asdict, replace
 import gzip
@@ -173,12 +174,12 @@ class TraceApiTests(unittest.TestCase):
         self.db=Database(self.root/'test.db');self.db.init();self.addCleanup(lambda:self.db.connect().close())
         for uid in (1,2):
             self.db.execute('INSERT INTO users(id,email,password_hash) VALUES(?,?,?)',(uid,str(uid),'x'))
-            self.db.execute('INSERT INTO sessions(token,user_id) VALUES(?,?)',(f'trace-{uid}',uid))
+            add_session(self.db, uid, f'trace-{uid}')
         self.db.execute("INSERT INTO vm_profiles(id,owner_user_id,name,host,port,username,encrypted_private_key) VALUES(1,1,'fixture','example.invalid',22,'ubuntu','x')")
         from fastapi.testclient import TestClient
-        self.patch=patch.multiple(self.api,db=self.db,settings=types.SimpleNamespace(artifact_dir=self.root/'artifacts'))
+        self.patch=patch.multiple(self.api,db=self.db,settings=iam_settings(self.root))
         self.patch.start();self.addCleanup(self.patch.stop)
-        self.client=TestClient(self.api.app);self.addCleanup(self.client.close)
+        self.client=TestClient(self.api.app, base_url="https://testserver");self.addCleanup(self.client.close)
         self.headers={'Authorization':'Bearer trace-1'}
 
     def save_profile(self,enabled):

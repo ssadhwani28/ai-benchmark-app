@@ -1,3 +1,71 @@
-apps/benchmark-control/docs/oci-deployment-2026-10-16.md
-apps/benchmark-control/docs/oci-deployment-2026-10-16.md
-apps/benchmark-control/docs/oci-deployment-2026-10-16.md
+# Local deployment workspaces and cloud credentials/configuration.
+/.local/
+/.oci/
+/.aws/
+/.docker/
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
+# Terraform downloads, private inputs, state and saved plans.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+*.tfplan
+*.tfplan.*
+terraform.tfplan
+crash.log
+crash.*.log
+# Keep .terraform.lock.hcl, Terraform source and *.tfvars.example in Git.
+
+# Generated deployment bundles (publish the stack ZIP as a release asset).
+/apps/benchmark-control/dist/
+/apps/benchmark-control/deploy/oci-resource-manager/application.zip
+
+# One-off pilot tooling and historical, tenancy-specific execution reports.
+/apps/benchmark-control/deploy/oidc_pilot.py
+/apps/benchmark-control/deploy/restricted_pilot.py
+/apps/benchmark-control/docs/oci-deployment-2026-10-16.md
+/apps/benchmark-control/docs/integration-smoke-2026-10-23.md
+
+# Local application data, generated reports and logs.
+/apps/benchmark-control/data/
+/apps/benchmark-control/output/
+/apps/benchmark-control/artifacts/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.log
+
+# Python environments, bytecode and local tool output.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# OS/editor temporary files.
+.DS_Store
+._*
+Thumbs.db
+*~
+*.swp
+*.swo

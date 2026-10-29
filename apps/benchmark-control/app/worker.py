@@ -51,6 +51,7 @@ class Worker:
             WHERE status='running'
             """
         )
+        self.db.migrate_provision_credentials(self.secrets.encrypt)
         self._thread.start()
 
     def stop(self) -> None:
@@ -70,6 +71,8 @@ class Worker:
                     "UPDATE jobs SET status='failed', error_message=?, result=COALESCE(?,result), finished_at=CURRENT_TIMESTAMP WHERE id=?",
                     (redact(str(exc)), json.dumps(exc.result) if isinstance(exc, BenchmarkExecutionError) else None, job["id"]),
                 )
+            finally:
+                self.db.execute("DELETE FROM job_credentials WHERE job_id=?", (job["id"],))
 
     def _run_job(self, job: dict[str, Any]) -> None:
         self.db.execute("UPDATE jobs SET status='running', started_at=CURRENT_TIMESTAMP WHERE id=?", (job["id"],))
@@ -601,7 +604,7 @@ print(json.dumps({{"target": target, "matched": len(matches), "stopped": stopped
         boot_volume_gb = int(payload["boot_volume_gb"])
         username = str(payload.get("username") or "ubuntu")
         ssh_public_key = str(payload["ssh_public_key"]).strip()
-        ssh_private_key = str(payload.get("ssh_private_key") or "").strip()
+        ssh_private_key = self.db.provision_private_key(job_id, user_id, self.secrets.decrypt).strip()
         assign_public_ip = bool(payload.get("assign_public_ip", True))
         smt_requested = payload.get("smt_enabled")
 

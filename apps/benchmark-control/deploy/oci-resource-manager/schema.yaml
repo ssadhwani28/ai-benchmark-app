@@ -1,0 +1,298 @@
+title: AI Benchmark Container with OCI IAM
+description: HTTPS on port 443 through a public network load balancer, Container Instance
+  backend, OCI IAM integrated app and read-only configuration volume. No Vault required
+  by default.
+schemaVersion: 1.1.0
+version: 2.4.0
+locale: en
+variableGroups:
+- title: Deployment location
+  variables:
+  - tenancy_ocid
+  - region
+  - compartment_ocid
+  - availability_domain
+  - name
+  - vcn_compartment_ocid
+  - vcn_ocid
+  - subnet_compartment_ocid
+  - subnet_ocid
+- title: Container image and capacity
+  variables:
+  - app_image_url
+  - registry_username
+  - registry_password
+  - shape
+  - ocpus
+  - memory_in_gbs
+- title: IAM authentication
+  variables:
+  - identity_domain_url
+  - oidc_issuer
+  - iam_template_id
+  - iam_mfa_signon_policy_id
+  - oidc_authorization_mode
+  - allowed_subjects
+- title: Runtime configuration (Vault optional)
+  variables:
+  - runtime_config_delivery
+  - existing_vault_ocid
+  - existing_vault_key_ocid
+- title: 'Network access: HTTPS clients and optional SSH targets'
+  variables:
+  - allowed_client_cidrs_text
+  - benchmark_target_cidrs_text
+  - allowed_client_cidrs
+  - benchmark_target_cidrs
+- title: 'Optional: allow the app to provision benchmark VMs'
+  variables:
+  - benchmark_compartment_ocids
+  - benchmark_network_compartment_ocids
+  description: Leave both fields empty unless the running application should create/manage
+    benchmark compute resources. These permissions do not deploy the application container.
+- title: Report archive in private Object Storage
+  variables:
+  - report_archive_enabled
+  - report_archive_create_bucket
+  - report_archive_bucket_name
+  - report_archive_compartment_ocid
+  - report_archive_region
+  - report_archive_link_hours
+variables:
+  tenancy_ocid:
+    type: string
+    title: Tenancy OCID
+    required: true
+  compartment_ocid:
+    type: oci:identity:compartment:id
+    title: Application compartment
+    required: true
+  region:
+    type: oci:identity:region:name
+    title: Deployment region
+    required: true
+    default: ${session.region}
+    description: Select the target OCI Console region before creating/editing the
+      stack. Keep this region aligned with the Console so the AD and network lists
+      show matching resources.
+  availability_domain:
+    type: oci:identity:availabilitydomain:name
+    title: Availability domain
+    required: true
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+    description: Select an AD in the deployment region. An AD-specific subnet must
+      match this AD; a regional subnet works across ADs.
+  name:
+    type: string
+    title: Deployment name
+    required: false
+  vcn_ocid:
+    type: oci:core:vcn:id
+    title: Existing VCN
+    required: true
+    dependsOn:
+      compartmentId: ${vcn_compartment_ocid}
+  subnet_ocid:
+    type: oci:core:subnet:id
+    title: Existing public subnet
+    required: true
+    dependsOn:
+      compartmentId: ${subnet_compartment_ocid}
+      vcnId: ${vcn_ocid}
+      hidePrivateSubnet: true
+    description: Public subnets in the selected VCN and subnet compartment. Existing
+      routes must support Internet Gateway egress.
+  app_image_url:
+    type: string
+    title: Container image URL pinned by digest
+    required: true
+  registry_username:
+    type: string
+    title: Private registry username (optional)
+    required: false
+  registry_password:
+    type: password
+    title: Private registry token (optional)
+    required: false
+    sensitive: true
+  shape:
+    type: enum
+    title: Container Instance shape
+    required: false
+    enum:
+    - CI.Standard.A1.Flex
+    - CI.Standard.E4.Flex
+  ocpus:
+    type: number
+    title: OCPUs
+    required: false
+  memory_in_gbs:
+    type: number
+    title: Memory (GiB)
+    required: false
+  identity_domain_url:
+    type: string
+    title: Existing Identity Domain HTTPS URL
+    required: true
+  oidc_issuer:
+    type: string
+    title: Exact issuer from domain discovery
+    required: true
+  iam_template_id:
+    type: string
+    title: Confidential Application template ID
+    required: false
+  iam_mfa_signon_policy_id:
+    type: string
+    title: Existing MFA sign-on policy ID
+    required: true
+  allowed_subjects:
+    type: array
+    title: Approved OIDC subject values
+    required: ${oidc_authorization_mode == "subject_allowlist"}
+    items:
+      type: string
+    visible: ${oidc_authorization_mode == "subject_allowlist"}
+    default: []
+    description: Additional restriction only in subject_allowlist mode. Enter exact
+      OIDC sub values, such as operator@example.com after verifying the claim. Not
+      needed in app_assignment mode.
+  allowed_client_cidrs:
+    type: array
+    title: Approved client IPv4 CIDRs
+    required: false
+    items:
+      type: string
+    visible: false
+    description: Legacy list input for existing stacks and Terraform callers. Values
+      are combined with the text field.
+    default: []
+  benchmark_target_cidrs:
+    type: array
+    title: Optional outbound SSH target CIDRs
+    required: false
+    items:
+      type: string
+    visible: false
+    description: Legacy list input for existing stacks and Terraform callers. Values
+      are combined with the text field.
+    default: []
+  benchmark_compartment_ocids:
+    type: text
+    title: Optional benchmark VM compartment OCIDs
+    required: false
+    description: 'Optional: compartments where the app may manage benchmark VMs and
+      volumes. Leave blank to disable. Enter compartment OCIDs separated by commas/newlines,
+      or a JSON list such as []. Not needed to deploy the application or archive reports.'
+    default: ''
+    multiline: true
+  benchmark_network_compartment_ocids:
+    type: text
+    title: Optional benchmark network compartment OCIDs
+    required: false
+    description: 'Optional: compartments whose networks the app may use for benchmark
+      VMs; required if VM compartments are supplied. Leave blank to disable. Enter
+      compartment OCIDs separated by commas/newlines, or a JSON list such as []. Not
+      needed to deploy the application or archive reports.'
+    default: ''
+    multiline: true
+  existing_vault_ocid:
+    type: string
+    title: Existing Vault OCID
+    required: ${runtime_config_delivery != "config_volume"}
+    visible: ${runtime_config_delivery != "config_volume"}
+  existing_vault_key_ocid:
+    type: string
+    title: Existing enabled AES-256 key OCID
+    required: ${runtime_config_delivery != "config_volume"}
+    visible: ${runtime_config_delivery != "config_volume"}
+  report_archive_enabled:
+    type: boolean
+    title: Enable automatic report archiving
+    default: false
+  report_archive_create_bucket:
+    type: boolean
+    title: Create a new private versioned report bucket
+    default: false
+    description: Leave unchecked to use an existing bucket. Keep this checked if you
+      later disable uploads to retain the managed bucket.
+  report_archive_bucket_name:
+    type: string
+    title: Report bucket name
+    description: Required for an existing bucket. Leave blank with Create selected
+      to generate a name.
+    required: false
+    visible: ${report_archive_enabled || report_archive_create_bucket}
+  report_archive_compartment_ocid:
+    type: string
+    title: Report bucket compartment OCID
+    description: Blank uses the application compartment.
+    required: false
+    visible: ${report_archive_enabled || report_archive_create_bucket}
+  report_archive_region:
+    type: string
+    title: Report bucket region
+    description: Blank uses the application region.
+    required: false
+    visible: ${report_archive_enabled || report_archive_create_bucket}
+  report_archive_link_hours:
+    type: integer
+    title: Report download-link lifetime (hours)
+    default: 168
+    minimum: 1
+    maximum: 8760
+    visible: ${report_archive_enabled}
+  runtime_config_delivery:
+    type: enum
+    title: Runtime configuration delivery
+    default: config_volume
+    enum:
+    - config_volume
+    - vault
+    - kms_object_storage
+    description: 'Private read-only configuration volume by default; no Vault/key
+      required. Volume payload and Terraform state contain credentials: restrict configuration/state
+      access. Optional Vault/KMS modes require an existing Vault and key; KMS object
+      mode also needs a private bucket.'
+  vcn_compartment_ocid:
+    type: oci:identity:compartment:id
+    title: VCN compartment
+    required: true
+    default: ${compartment_ocid}
+    description: Compartment containing the existing VCN; it may differ from the application
+      compartment.
+  subnet_compartment_ocid:
+    type: oci:identity:compartment:id
+    title: Subnet compartment
+    required: true
+    default: ${vcn_compartment_ocid}
+    description: Compartment containing the subnet. Change this if the subnet is in
+      a different compartment from its VCN.
+  allowed_client_cidrs_text:
+    type: text
+    multiline: true
+    title: Allowed HTTPS client IPs / CIDRs (required)
+    description: Your public source IP followed by /32, or approved corporate IPv4
+      CIDRs. Enter one per line or separate with commas, e.g. 223.181.58.24/32. Controls
+      access to HTTPS 443; unrestricted /0 is rejected.
+    required: true
+  benchmark_target_cidrs_text:
+    type: text
+    multiline: true
+    title: Outbound SSH target networks (optional)
+    description: Leave blank unless the app connects to benchmark hosts over SSH.
+      Enter target private IPs with /32 or IPv4 network CIDRs, one per line or comma-separated.
+      Opens outbound TCP 22 only; does not grant VM provisioning permissions.
+    required: false
+  oidc_authorization_mode:
+    type: enum
+    title: Application access control
+    default: app_assignment
+    enum:
+    - app_assignment
+    - subject_allowlist
+    description: 'app_assignment: users or groups assigned in the IAM integrated application
+      can sign in; manage assignments in IAM without redeploying. subject_allowlist:
+      assignments AND exact approved subjects are required. Both enforce IAM app grants
+      and the selected sign-on policy.'

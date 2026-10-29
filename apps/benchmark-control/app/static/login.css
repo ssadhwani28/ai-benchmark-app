@@ -1,0 +1,27 @@
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-synthesis:none;color:#e5eaf2;background:#0b1019}
+*{box-sizing:border-box}
+body{margin:0;min-width:280px;background:radial-gradient(ellipse at 50% 10%,#152b31 0,transparent 55%)}
+a{color:inherit;text-decoration:none}
+a:focus-visible{outline:2px solid #66d8bc;outline-offset:5px}
+.login-shell{min-height:100vh;min-height:100svh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px}
+.brand{display:inline-flex;align-items:center;gap:12px;margin-bottom:36px;font-size:18px;font-weight:650;letter-spacing:-.35px}
+.brand small{display:block;margin-top:5px;color:#97a8bd;font-size:9px;font-weight:600;letter-spacing:1.8px}
+.brand-mark{display:grid;place-items:center;width:42px;height:42px;background:#19352f;color:#66d8bc;border:1px solid #32574f;border-radius:12px}
+svg{width:25px;height:25px}
+.login-card{width:100%;max-width:450px;padding:36px;background:#121b28;border:1px solid #263346;border-radius:18px;box-shadow:0 24px 72px #0003}
+.lock-mark{display:grid;place-items:center;width:46px;height:46px;margin-bottom:28px;color:#66d8bc;border:1px solid #2b4a45;border-radius:13px;background:#162c2b}
+.eyebrow{margin:0 0 12px;color:#97a8bd;font-size:10px;font-weight:650;letter-spacing:1.7px}
+h1{margin:0;font-size:30px;line-height:1.2;letter-spacing:-1px;font-weight:600}
+.intro{margin:16px 0 26px;color:#a8b7ca;font-size:14px;line-height:1.75}
+.login-button{min-height:49px;display:flex;align-items:center;justify-content:center;gap:18px;padding:14px 18px;background:#66d8bc;color:#0d2621;border:1px solid #66d8bc;border-radius:9px;font-size:14px;font-weight:650;transition:background .15s}
+.login-button:hover{background:#84e9d0}
+.login-button span{font-size:20px;line-height:1}
+.login-help{margin:17px 0 28px;color:#97a8bd;font-size:12px;line-height:1.8}
+.login-message{margin:0 0 20px;color:#ecc78b;font-size:13px;line-height:1.6}
+.login-message:empty{display:none}
+.login-unavailable{padding:16px;background:#26302c;border:1px solid #526346;border-radius:9px;color:#ecc78b;font-size:13px;line-height:1.7}
+.card-footer{display:flex;align-items:center;gap:9px;padding-top:22px;border-top:1px solid #263346;color:#97a8bd;font-size:11px}
+.status-dot{width:6px;height:6px;border-radius:50%;background:#66d8bc;flex-shrink:0}
+.page-footer{margin:27px 0 0;color:#788ba3;font-size:11px;text-align:center;line-height:1.8}
+.page-footer>span{padding:0 5px}
+@media(max-width:480px){.login-shell{padding:32px 16px}.login-card{padding:28px 24px}.brand{margin-bottom:28px}h1{font-size:27px}}

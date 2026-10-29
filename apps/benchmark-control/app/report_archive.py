@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import uuid
 import zipfile
@@ -14,13 +15,27 @@ FILES = ('report.zip', 'metrics.csv', 'report.json', 'manifest.json')
 
 
 def enabled():
-    return bool(os.getenv('APP_REPORT_ARCHIVE_BUCKET'))
+    return bool(os.getenv('APP_REPORT_ARCHIVE_BUCKET', '').strip())
+
+
+def configuration():
+    """Non-secret archive settings, also used by the authenticated reporting UI."""
+    bucket = os.getenv('APP_REPORT_ARCHIVE_BUCKET', '').strip()
+    hours = int(os.getenv('APP_REPORT_ARCHIVE_LINK_HOURS', '168'))
+    if not 1 <= hours <= 8760:
+        raise ValueError('Archive link lifetime must be between 1 and 8760 hours')
+    if bucket and not re.fullmatch(r'[a-zA-Z0-9_.-]{1,256}', bucket):
+        raise ValueError('Invalid archive bucket name')
+    return dict(enabled=bool(bucket), bucket=bucket or None,
+                namespace=os.getenv('APP_REPORT_ARCHIVE_NAMESPACE', '').strip() or None,
+                region=os.getenv('APP_REPORT_ARCHIVE_REGION') or os.getenv('OCI_REGION') or 'us-ashburn-1',
+                link_hours=hours)
 
 
 def client():
     import oci
     from .oci_ops import principal_signer
-    region = os.getenv('APP_REPORT_ARCHIVE_REGION', 'us-ashburn-1')
+    region = configuration()['region']
     if os.getenv('APP_REPORT_ARCHIVE_AUTH', 'principal') == 'config':
         config = oci.config.from_file(profile_name=os.getenv('OCI_CLI_PROFILE', 'DEFAULT'))
         config['region'] = region
@@ -34,11 +49,17 @@ def sha256(path):
 
 
 def archive_report(root: Path, job, storage=None):
+    config = configuration()
+    if not config['enabled']:
+        raise RuntimeError('Report archiving is disabled')
     storage = storage or client()
-    namespace = os.getenv('APP_REPORT_ARCHIVE_NAMESPACE') or storage.get_namespace().data
-    bucket = os.environ['APP_REPORT_ARCHIVE_BUCKET']
-    if storage.get_bucket(namespace, bucket).data.public_access_type != 'NoPublicAccess':
+    namespace = config['namespace'] or storage.get_namespace().data
+    bucket = config['bucket']
+    details = storage.get_bucket(namespace, bucket).data
+    if details.public_access_type != 'NoPublicAccess':
         raise RuntimeError('Report archive bucket must be private')
+    if details.storage_tier != 'Standard':
+        raise RuntimeError('Report archive bucket must use Standard storage')
     manifest = json.loads((root/'manifest.json').read_text())
     for name, expected in manifest['files'].items():
         path = (root/name).resolve()
@@ -74,18 +95,16 @@ def archive_report(root: Path, job, storage=None):
         finally:
             response.data.close()
         hashes[name] = checksum
-    return dict(namespace=namespace, bucket=bucket, region=os.getenv('APP_REPORT_ARCHIVE_REGION', 'us-ashburn-1'),
+    return dict(namespace=namespace, bucket=bucket, region=config['region'],
                 prefix=prefix, sha256=hashes, verified_at=datetime.now(timezone.utc).isoformat())
 
 
 def download_link(archive, storage=None):
     import oci
+    hours = configuration()['link_hours']
     storage = storage or client()
     # Use the archive's region, even if the current deployment default changed.
     storage.base_client.set_region(archive['region'])
-    hours = int(os.getenv('APP_REPORT_ARCHIVE_LINK_HOURS', '168'))
-    if not 1 <= hours <= 8760:
-        raise ValueError('Archive link lifetime must be between 1 and 8760 hours')
     expires = datetime.now(timezone.utc) + timedelta(hours=hours)
     result = storage.create_preauthenticated_request(archive['namespace'], archive['bucket'],
         oci.object_storage.models.CreatePreauthenticatedRequestDetails(

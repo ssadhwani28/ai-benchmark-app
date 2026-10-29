@@ -3,10 +3,16 @@ services:
     build: .
     container_name: aig-benchmark-control
     ports:
-      - "${APP_PORT:-18080}:8080"
+      - "127.0.0.1:${APP_PORT:-18080}:8080"
     environment:
       APP_SECRET: "${APP_SECRET:?APP_SECRET must be set}"
-      APP_LOCAL_USER_EMAIL: "${APP_LOCAL_USER_EMAIL:?APP_LOCAL_USER_EMAIL must be set}"
+      APP_AUTH_MODE: "${APP_AUTH_MODE:-disabled}"
+      APP_PUBLIC_URL: "${APP_PUBLIC_URL:-}"
+      APP_OIDC_DOMAIN_URL: "${APP_OIDC_DOMAIN_URL:-}"
+      APP_OIDC_ISSUER: "${APP_OIDC_ISSUER:-}"
+      APP_OIDC_CLIENT_ID: "${APP_OIDC_CLIENT_ID:-}"
+      APP_OIDC_CLIENT_SECRET: "${APP_OIDC_CLIENT_SECRET:-}"
+      APP_OIDC_ALLOWED_SUBJECTS: "${APP_OIDC_ALLOWED_SUBJECTS:-}"
       APP_REPORT_WORKER_MODE: "external"
       APP_DB_PATH: "/data/app.db"
       APP_ARTIFACT_DIR: "/data/artifacts"

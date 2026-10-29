@@ -20,6 +20,6 @@ COPY app /app/app
 RUN python -c "import oci; print('OCI Python SDK available')"
 
 VOLUME ["/data"]
-EXPOSE 8080
+EXPOSE 8080 443
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

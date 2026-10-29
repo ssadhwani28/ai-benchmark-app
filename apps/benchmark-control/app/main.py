@@ -7,8 +7,8 @@ import tempfile
 from typing import Annotated, Any, Literal
 import urllib.request
 
-from fastapi import Cookie, Request, Depends, FastAPI, Header, HTTPException, Query, Response
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, JSONResponse
+from fastapi import Request, Depends, FastAPI, Header, HTTPException, Response
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, JSONResponse, RedirectResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr, model_validator
@@ -17,7 +17,8 @@ from .benchmark import normalize_guidellm_result, report_csv, report_html, repor
 from .config import get_settings
 from .db import Database
 from .oci_ops import DEFAULT_VM_DEPLOYMENT, DOC_APPROVED_SHAPES, context_from_saved_auth, list_accessible_compartments, principal_signer, profile_text_with_key_file, signer_tenancy_id, ubuntu_2404_images
-from .security import SecretBox, create_token, hash_password, redact, verify_password
+from .security import SecretBox, redact
+from .iam_auth import SESSION_COOKIE, install_iam_auth, session_key
 from .ssh_client import HEALTH_SCRIPT, SshClient, VmProfile, parse_health
 from .worker import Worker
 from .report_worker import ReportWorker
@@ -26,12 +27,33 @@ from .reporting import enqueue_report
 settings = get_settings()
 db = Database(settings.db_path)
 db.init()
+# Changing authorization policy requires a fresh IAM authorization flow.
+db.execute("DELETE FROM sessions WHERE authorization_mode<>?", (settings.oidc_authorization_mode,))
 secret_box = SecretBox(settings.app_secret)
+db.migrate_provision_credentials(secret_box.encrypt)
+db.revoke_legacy_sessions()
 worker = Worker(db, secret_box, settings.artifact_dir)
 report_worker = ReportWorker(db, settings.artifact_dir)
 
-app = FastAPI(title="AI Inference Benchmark Control", version="0.3.3")
+app = FastAPI(title="AI Inference Benchmark Control", version="0.4.4")
+HTML_REPORT_SANDBOX = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"
+iam_oauth = install_iam_auth(app, settings, lambda: db)
 app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
+
+
+@app.middleware("http")
+async def protect_browser_requests(request: Request, call_next):
+    if request.method not in {"GET", "HEAD", "OPTIONS"} and (request.cookies.get(SESSION_COOKIE) or request.cookies.get("report_access")):
+        if request.headers.get("origin") != settings.public_url:
+            return JSONResponse(status_code=403, content={"detail": "Invalid request origin"})
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # Native same-origin POST forms need a non-null Origin for CSRF validation.
+    # Keep OAuth callbacks/reports no-referrer so authorization URLs stay private.
+    response.headers["Referrer-Policy"] = "same-origin" if request.url.path == "/" else "no-referrer"
+    if request.url.path in {"/", "/login"} or request.url.path.startswith(("/auth/", "/api/")):
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_without_credentials(request: Request, exc: RequestValidationError):
@@ -40,16 +62,6 @@ async def validation_error_without_credentials(request: Request, exc: RequestVal
         {key:error[key] for key in ('type','loc','msg') if key in error}
         for error in exc.errors()
     ]})
-
-
-class RegisterRequest(BaseModel):
-    email: str
-    password: str = Field(min_length=8)
-
-
-class LoginRequest(BaseModel):
-    email: str
-    password: str
 
 
 class AuthValidationRequest(BaseModel):
@@ -143,21 +155,29 @@ class BenchmarkRequest(BaseModel):
 
 
 def current_user(
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
-    token: Annotated[str | None, Query()] = None,
 ) -> dict[str, Any]:
-    if token:
-        bearer = token
-    elif authorization and authorization.startswith("Bearer "):
+    if settings.auth_mode != "oci_iam":
+        raise HTTPException(status_code=401, detail="OCI IAM sign-in is not configured")
+    if authorization and authorization.startswith("Bearer "):
         bearer = authorization.removeprefix("Bearer ").strip()
     else:
+        bearer = request.cookies.get(SESSION_COOKIE) or request.cookies.get("report_access")
+    if not bearer:
         raise HTTPException(status_code=401, detail="Missing bearer token")
     row = db.one(
-        "SELECT users.* FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token=?",
-        (bearer,),
+        """SELECT users.* FROM sessions JOIN users ON users.id=sessions.user_id
+           WHERE sessions.token=? AND sessions.expires_at>unixepoch() AND sessions.authorization_mode=?""",
+        (session_key(bearer), settings.oidc_authorization_mode),
     )
     if not row:
         raise HTTPException(status_code=401, detail="Invalid token")
+    identity = db.one("SELECT subject FROM oidc_identities WHERE user_id=? AND issuer=?",
+                      (row["id"], settings.oidc_issuer))
+    if not identity or (settings.oidc_authorization_mode == "subject_allowlist" and identity["subject"] not in settings.oidc_allowed_subjects):
+        raise HTTPException(status_code=403, detail="IAM user is no longer approved")
+    row["iam_subject"] = identity["subject"]
     return row
 
 
@@ -175,29 +195,41 @@ def stop_worker() -> None:
         report_worker.stop()
 
 
+def browser_is_signed_in(request: Request) -> bool:
+    try:
+        # Browser navigation must use the validated session, never a supplied identity.
+        current_user(request, authorization=None)
+    except HTTPException as error:
+        if error.status_code not in {401, 403}:
+            raise
+        return False
+    return True
+
+
 @app.get("/", response_class=HTMLResponse)
-def index() -> FileResponse:
-    return FileResponse(Path(__file__).parent / "static" / "index.html")
+def index(request: Request):
+    if not browser_is_signed_in(request):
+        return RedirectResponse("/login", status_code=303)
+    return FileResponse(Path(__file__).parent / "templates" / "index.html")
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request):
+    if browser_is_signed_in(request):
+        return RedirectResponse("/", status_code=303)
+    page = (Path(__file__).parent / "templates" / "login.html").read_text()
+    if settings.auth_mode == "oci_iam":
+        action = '<a class="login-button" href="/auth/login">Sign in with OCI IAM <span aria-hidden="true">→</span></a>'
+        message = "Your session has ended. Sign in again to continue." if request.query_params.get("expired") == "1" else ""
+    else:
+        action = '<p class="login-unavailable" role="status">Sign-in is not configured. Contact your administrator to enable OCI IAM.</p>'
+        message = ""
+    return HTMLResponse(page.replace("{{LOGIN_ACTION}}", action).replace("{{LOGIN_MESSAGE}}", message))
 
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "version": app.version}
-
-
-@app.post("/api/local-session")
-def local_session() -> dict[str, Any]:
-    email = settings.local_user_email.lower()
-    user = db.one("SELECT * FROM users WHERE email=?", (email,))
-    if not user:
-        cur = db.execute(
-            "INSERT INTO users(email, password_hash) VALUES (?, ?)",
-            (email, hash_password(create_token())),
-        )
-        user = {"id": int(cur.lastrowid), "email": email, "role": "user"}
-    token = create_token()
-    db.execute("INSERT INTO sessions(token, user_id) VALUES (?, ?)", (token, user["id"]))
-    return {"token": token, "user": {"id": user["id"], "email": user["email"], "role": user["role"]}}
 
 
 @app.post("/api/auth/validate")
@@ -226,33 +258,9 @@ def validate_auth(req: AuthValidationRequest, user: dict[str, Any] = Depends(cur
         return result
 
 
-@app.post("/api/register")
-def register(req: RegisterRequest) -> dict[str, Any]:
-    try:
-        cur = db.execute(
-            "INSERT INTO users(email, password_hash) VALUES (?, ?)",
-            (req.email.lower(), hash_password(req.password)),
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="User already exists or registration failed") from exc
-    token = create_token()
-    db.execute("INSERT INTO sessions(token, user_id) VALUES (?, ?)", (token, int(cur.lastrowid)))
-    return {"token": token, "user": {"id": int(cur.lastrowid), "email": req.email.lower(), "role": "user"}}
-
-
-@app.post("/api/login")
-def login(req: LoginRequest) -> dict[str, Any]:
-    user = db.one("SELECT * FROM users WHERE email=?", (req.email.lower(),))
-    if not user or not verify_password(req.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_token()
-    db.execute("INSERT INTO sessions(token, user_id) VALUES (?, ?)", (token, user["id"]))
-    return {"token": token, "user": {"id": user["id"], "email": user["email"], "role": user["role"]}}
-
-
 @app.get("/api/me")
 def me(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
-    return {"id": user["id"], "email": user["email"], "role": user["role"]}
+    return {"id": user["id"], "email": user["email"], "role": user["role"], "iam_subject": user.get("iam_subject")}
 
 
 @app.post("/api/vm-profiles")
@@ -414,7 +422,7 @@ def oci_shapes(_: dict[str, Any] = Depends(current_user)) -> list[dict[str, Any]
 def create_oci_instance(req: OciVmRequest, user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
     if req.shape not in DOC_APPROVED_SHAPES:
         raise HTTPException(status_code=400, detail="Shape is not approved by the initial benchmark guide")
-    job_id = db.create_job(user["id"], "provision_vm", req.model_dump())
+    job_id = db.create_provision_job(user["id"], req.model_dump(), secret_box.encrypt)
     db.audit(user["id"], "enqueued", "provision_vm", job_id, {"display_name": req.display_name, "shape": req.shape, "smt_enabled": req.smt_enabled})
     return {"job_id": job_id}
 
@@ -716,6 +724,15 @@ def generate_report(req: GenerateReportRequest, user: dict[str, Any] = Depends(c
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/api/report-archive/config")
+def report_archive_configuration(user: dict[str, Any] = Depends(current_user)):
+    from .report_archive import configuration
+    try:
+        return configuration()
+    except ValueError:
+        raise HTTPException(503, "Report archive configuration is invalid; contact your administrator") from None
+
+
 @app.get("/api/generated-reports")
 def generated_reports(user: dict[str, Any] = Depends(current_user)):
     from .report_archive import enabled
@@ -775,18 +792,18 @@ def open_generated_report(report_id: int, request: Request, response: Response, 
     if row['status'] != 'succeeded':
         raise HTTPException(status_code=409, detail='Report is not ready')
     authorization = request.headers.get('authorization', '')
-    access = authorization.removeprefix('Bearer ').strip() if authorization.startswith('Bearer ') else request.query_params.get('token')
-    response.set_cookie('report_access', access, path=f'/api/generated-reports/{report_id}/files/', httponly=True,
-                        secure=request.url.scheme == 'https', samesite='lax', max_age=3600)
+    access = authorization.removeprefix('Bearer ').strip() if authorization.startswith('Bearer ') else None
+    if access:
+        response.set_cookie('report_access', access, path=f'/api/generated-reports/{report_id}/files/', httponly=True,
+                            secure=True, samesite='lax', max_age=3600)
     return {'ready': True}
 
 
 def report_artifact_user(
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
-    token: Annotated[str | None, Query()] = None,
-    report_access: Annotated[str | None, Cookie()] = None,
 ):
-    return current_user(authorization=authorization, token=token or (None if authorization else report_access))
+    return current_user(request, authorization=authorization)
 
 
 @app.get("/api/generated-reports/{report_id}/files/{filename:path}")
@@ -803,13 +820,10 @@ def generated_report_file(report_id: int, filename: str, request: Request, user:
     headers = {'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer', 'Cache-Control':'private, no-store'}
     if target.suffix == '.html':
         # View in a sandbox; structural evidence never executes as app-origin script.
-        headers['Content-Security-Policy'] = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"
+        headers['Content-Security-Policy'] = HTML_REPORT_SANDBOX
         response = FileResponse(target, media_type='text/html', headers=headers)
     else:
         response = FileResponse(target, filename=target.name, headers=headers)
-    access = request.query_params.get('token')
-    if access:
-        response.set_cookie('report_access', access, path=f'/api/generated-reports/{report_id}/files/', httponly=True, secure=request.url.scheme == 'https', samesite='lax', max_age=3600)
     return response
 
 
@@ -831,7 +845,8 @@ def report_markdown_endpoint(job_id: int, user: dict[str, Any] = Depends(current
 
 @app.get("/api/reports/{job_id}.html")
 def report_html_endpoint(job_id: int, user: dict[str, Any] = Depends(current_user)) -> HTMLResponse:
-    return HTMLResponse(report_html(_benchmark_result(job_id, user["id"])))
+    return HTMLResponse(report_html(_benchmark_result(job_id, user["id"])),
+                        headers={"Content-Security-Policy": HTML_REPORT_SANDBOX})
 
 
 def _assert_owned(table: str, entity_id: int, user_id: int) -> None:

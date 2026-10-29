@@ -1,0 +1,80 @@
+# Copy privately to terraform.tfvars. Replace every YOUR_* placeholder.
+# Complete field descriptions: FIELD-REFERENCE.md. First-time steps: README.md.
+# Never commit real tokens, private tfvars, Terraform state or saved plans.
+
+# REQUIRED: deployment location and an existing public network.
+tenancy_ocid        = "YOUR_TENANCY_OCID"
+compartment_ocid    = "YOUR_APPLICATION_COMPARTMENT_OCID"
+region              = "us-ashburn-1"                       # choose your region; align the OCI Console region
+availability_domain = "YOUR_FULL_AVAILABILITY_DOMAIN_NAME" # tenancy prefix included
+vcn_ocid            = "YOUR_EXISTING_VCN_OCID"
+subnet_ocid         = "YOUR_EXISTING_PUBLIC_SUBNET_OCID" # IGW routing; regional or matching AD
+
+# OPTIONAL: Resource Manager picker scopes only; not needed for direct Terraform.
+# vcn_compartment_ocid    = "YOUR_VCN_COMPARTMENT_OCID"
+# subnet_compartment_ocid = "YOUR_SUBNET_COMPARTMENT_OCID"
+
+# REQUIRED: publish the image first. Tags alone are not accepted.
+app_image_url = "YOUR_REGISTRY/YOUR_NAMESPACE/benchmark@sha256:REPLACE_WITH_64_HEX_DIGITS"
+# CONDITIONAL: supply BOTH for a private repository; blank for a public image.
+# registry_username = "YOUR_NAMESPACE/Default/YOUR_USERNAME"
+# registry_password = "SUPPLY_AS_A_SENSITIVE_STACK_VARIABLE" # auth token, not Console password
+
+# OPTIONAL: these are the defaults; size/architecture must suit the image/AD.
+name          = "benchmark-test"      # 3-30 lowercase letters/digits/hyphens, starts with a letter
+shape         = "CI.Standard.A1.Flex" # ARM64; E4 needs an AMD64 image
+ocpus         = 1
+memory_in_gbs = 4
+
+# REQUIRED: existing Identity Domain, exact discovery issuer and MFA policy.
+identity_domain_url = "https://YOUR_IDENTITY_DOMAIN_HOST" # origin only
+# Copy issuer exactly from <identity_domain_url>/.well-known/openid-configuration.
+oidc_issuer = "https://identity.oraclecloud.com/" # example; verify, preserve slash
+# OciConsolePolicy was used in the test domain; verify the policy ID/rules in yours.
+iam_mfa_signon_policy_id = "YOUR_EXISTING_MFA_POLICY_ID"
+# OPTIONAL: default accepts users/groups assigned in the integrated app after Apply.
+oidc_authorization_mode = "app_assignment"
+# CONDITIONAL: subject_allowlist additionally requires exact subjects AND IAM assignment.
+# allowed_subjects = ["YOUR_APPROVED_LOGIN_SUBJECT"]
+# OPTIONAL: confidential client template default.
+iam_template_id = "CustomWebAppTemplateId"
+
+# REQUIRED: your browser's public egress IPv4 CIDR, not the app/LB IP or laptop LAN IP.
+allowed_client_cidrs_text = "198.51.100.24/32" # documentation example: REPLACE before Plan
+# Multiple entries: "198.51.100.24/32,203.0.113.0/24" or newlines. /0 is rejected.
+# OPTIONAL: only if the app will SSH to benchmark hosts; does not grant VM permissions.
+benchmark_target_cidrs_text = "" # example when needed: "10.0.1.0/24,10.0.2.10/32"
+# OPTIONAL LEGACY lists: hidden in the form; combined with text entries, not overridden.
+# allowed_client_cidrs   = []
+# benchmark_target_cidrs = []
+
+# OPTIONAL: default private read-only configuration; NO Vault/key inputs required.
+runtime_config_delivery = "config_volume"
+# CONDITIONAL alternatives: "vault" or "kms_object_storage" require BOTH existing IDs.
+# existing_vault_ocid     = "YOUR_EXISTING_ACTIVE_VAULT_OCID"
+# existing_vault_key_ocid = "YOUR_EXISTING_ENABLED_AES_256_KEY_OCID"
+# KMS object mode additionally needs a private bucket even if reports are disabled.
+
+# OPTIONAL: leave both TEXT inputs blank to grant no benchmark VM permissions.
+# These are not needed to deploy the application/LB, sign in or archive reports.
+benchmark_compartment_ocids         = ""
+benchmark_network_compartment_ocids = ""
+# To enable, supply actual compartment OCIDs as comma/newline text in BOTH fields:
+# benchmark_compartment_ocids         = "YOUR_WORKLOAD_COMPARTMENT_OCID"
+# benchmark_network_compartment_ocids = "YOUR_BENCHMARK_NETWORK_COMPARTMENT_OCID"
+# JSON list STRING alternative: jsonencode(["YOUR_COMPARTMENT_OCID"]).
+# Do not pass a native Terraform list to these two string variables.
+
+# OPTIONAL: report uploads disabled by default.
+report_archive_enabled       = false
+report_archive_create_bucket = false
+# CONDITIONAL: to upload, set enabled=true and choose ONE bucket arrangement:
+# 1) Existing private Standard bucket: create_bucket=false and an exact bucket NAME.
+# 2) New private/versioned Standard bucket: create_bucket=true; blank generates a name.
+report_archive_bucket_name = "" # e.g. "team-benchmark-reports"; not an OCID or URL
+# OPTIONAL: blank uses the application compartment/region.
+report_archive_compartment_ocid = ""
+report_archive_region           = ""
+# OPTIONAL: read-only ZIP link expiry in whole hours (1-8760), not object retention.
+report_archive_link_hours = 168 # 7 days; use 24 for 1 day
+# Keep create_bucket=true later when disabling uploads to retain a managed bucket.

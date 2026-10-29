@@ -1,0 +1,43 @@
+# Optional manual VM deployment; the Resource Manager Container Instance uses runtime.py.
+# Bind only the private host address and allow the load balancer through network rules.
+services:
+  benchmark-control:
+    build: .
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "443", "--ssl-keyfile", "/run/secrets/backend_key", "--ssl-certfile", "/run/secrets/backend_cert", "--no-access-log"]
+    ports:
+      - "${APP_BIND_ADDRESS:?Private host address required}:443:443"
+    environment:
+      APP_AUTH_MODE: oci_iam
+      APP_SECRET_FILE: /run/secrets/app_secret
+      APP_OIDC_CLIENT_SECRET_FILE: /run/secrets/oidc_client_secret
+      APP_PUBLIC_URL: "${APP_PUBLIC_URL:?}"
+      APP_OIDC_DOMAIN_URL: "${APP_OIDC_DOMAIN_URL:?}"
+      APP_OIDC_ISSUER: "${APP_OIDC_ISSUER:?}"
+      APP_OIDC_CLIENT_ID: "${APP_OIDC_CLIENT_ID:?}"
+      APP_OIDC_ALLOWED_SUBJECTS: "${APP_OIDC_ALLOWED_SUBJECTS:?}"
+      APP_REPORT_WORKER_MODE: external
+      APP_DB_PATH: /data/app.db
+      APP_ARTIFACT_DIR: /data/artifacts
+    volumes:
+      - benchmark-control-data:/data
+      - /opt/benchmark/secrets:/run/secrets:ro
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+  report-worker:
+    build: .
+    command: ["python", "-m", "app.report_worker"]
+    restart: unless-stopped
+    environment:
+      APP_DB_PATH: /data/app.db
+      APP_ARTIFACT_DIR: /data/artifacts
+    volumes:
+      - benchmark-control-data:/data
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  benchmark-control-data:

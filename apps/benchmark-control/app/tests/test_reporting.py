@@ -1,4 +1,5 @@
 """Report integrity, queue fencing, access control and benchmark evidence regressions."""
+from app.tests.security_fixtures import add_session, iam_settings
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -217,10 +218,10 @@ class ReportApiTests(ReportTestCase):
     def setUp(self):
         super().setUp()
         from fastapi.testclient import TestClient
-        for uid in [1,2]:self.db.execute('INSERT INTO sessions(token,user_id) VALUES(?,?)',(f'token-{uid}',uid))
-        self.patch=patch.multiple(self.api_module,db=self.db,settings=types.SimpleNamespace(artifact_dir=self.root/'artifacts'))
+        for uid in [1,2]:add_session(self.db, uid, f'token-{uid}')
+        self.patch=patch.multiple(self.api_module,db=self.db,settings=iam_settings(self.root))
         self.patch.start();self.addCleanup(self.patch.stop)
-        self.client=TestClient(self.api_module.app);self.addCleanup(self.client.close)
+        self.client=TestClient(self.api_module.app, base_url="https://testserver");self.addCleanup(self.client.close)
         self.headers={'Authorization':'Bearer token-1'}
 
     def test_api_ownership_download_cookie_and_traversal(self):
@@ -245,6 +246,18 @@ class ReportApiTests(ReportTestCase):
         self.assertEqual(self.client.get('/api/generated-reports',headers={'Authorization':'Bearer token-2'}).json(),[])
         self.assertEqual(self.client.post(f'/api/generated-reports/{rid}/retry',headers=self.headers).status_code,409)
 
+    def test_archive_configuration_requires_signin_and_exposes_only_non_secret_settings(self):
+        path = '/api/report-archive/config'
+        self.assertEqual(self.client.get(path).status_code, 401)
+        with patch.dict(os.environ, APP_REPORT_ARCHIVE_BUCKET='reports', APP_REPORT_ARCHIVE_REGION='eu-frankfurt-1', APP_REPORT_ARCHIVE_NAMESPACE='ns', APP_REPORT_ARCHIVE_LINK_HOURS='24'):
+            response = self.client.get(path, headers=self.headers)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), dict(enabled=True, bucket='reports', namespace='ns', region='eu-frankfurt-1', link_hours=24))
+        with patch.dict(os.environ, APP_REPORT_ARCHIVE_BUCKET='', APP_REPORT_ARCHIVE_LINK_HOURS='168'):
+            self.assertFalse(self.client.get(path, headers=self.headers).json()['enabled'])
+        with patch.dict(os.environ, APP_REPORT_ARCHIVE_LINK_HOURS='0'):
+            self.assertEqual(self.client.get(path, headers=self.headers).status_code, 503)
+
     def test_archive_link_owner_readiness_and_retry(self):
         rid = self.queue([self.job()])
         route = f'/api/generated-reports/{rid}/archive/download-link'
@@ -265,6 +278,22 @@ class ReportApiTests(ReportTestCase):
         self.assertEqual(response.status_code,200)
         row = self.db.one('SELECT archive_status,archive_attempts FROM report_jobs WHERE id=?',(rid,))
         self.assertEqual(row,{'archive_status':'pending','archive_attempts':0})
+
+    def test_native_html_is_sandboxed_and_cannot_use_the_application_origin(self):
+        payload = '<html><script>fetch("/api/me")</script></html>'
+        result = {'artifacts': {'html': {'content': payload}}}
+        with patch.object(self.api_module, '_benchmark_result', return_value=result):
+            response = self.client.get('/api/reports/1.html', headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text, payload)
+        directives = [part.strip() for part in response.headers['content-security-policy'].split(';')]
+        sandbox = next(part.strip() for part in directives if part.strip().startswith('sandbox'))
+        self.assertIn('allow-scripts', sandbox)
+        self.assertNotIn('allow-same-origin', sandbox)
+        self.assertNotIn('allow-top-navigation', sandbox)
+        self.assertIn("default-src 'none'", directives)
+        self.assertIn('no-store', response.headers['cache-control'])
+        self.assertEqual(response.headers['x-content-type-options'], 'nosniff')
 
     def test_failed_report_retry_and_frozen_sources(self):
         rid=self.queue([self.job()]);self.db.execute("UPDATE report_jobs SET status='failed' WHERE id=?",(rid,))

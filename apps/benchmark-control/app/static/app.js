@@ -1,4 +1,5 @@
-let token = localStorage.getItem("benchmarkToken") || "";
+let token = false; // UI session presence only; credentials stay in an HttpOnly cookie.
+localStorage.removeItem("benchmarkToken");
 let selectedVm = null;
 let selectedBenchmarkVm = null;
 let selectedVllm = null;
@@ -74,11 +75,16 @@ const workloadProfiles = {
 
 const api = async (path, options = {}) => {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
-  if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(path, { ...options, headers });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(text || `${res.status} ${res.statusText}`);
+    const error = new Error(text || `${res.status} ${res.statusText}`);
+    error.status = res.status;
+    if (res.status === 401) {
+      token = false;
+      window.location.replace("/login?expired=1");
+    }
+    throw error;
   }
   const contentType = res.headers.get("content-type") || "";
   return contentType.includes("application/json") ? res.json() : res.text();
@@ -125,22 +131,21 @@ function activateTab(name) {
   if (name === "vllm" && token) refreshRuntimeProcesses(false).catch(() => {});
 }
 
-async function ensureLocalSession() {
-  if (token) {
-    try {
-      const me = await api("/api/me");
-      sessionStatus(`Local session: ${me.email}`);
-      await refreshAll();
-      return;
-    } catch {
-      localStorage.removeItem("benchmarkToken");
-      token = "";
-    }
+async function ensureIamSession() {
+  let me;
+  try {
+    me = await api("/api/me");
+  } catch (error) {
+    token = false;
+    if (error.status === 403) window.location.replace("/login");
+    if (error.status === 401 || error.status === 403) return;
+    sessionStatus("Unable to check sign-in. Refresh to retry.");
+    throw error;
   }
-  const data = await api("/api/local-session", { method: "POST", body: "{}" });
-  token = data.token;
-  localStorage.setItem("benchmarkToken", token);
-  sessionStatus(`Local session: ${data.user.email}`);
+  token = true;
+  sessionStatus(`Signed in: ${me.iam_subject || me.email}`);
+  $("iamSignIn").hidden = true;
+  $("iamSignOut").hidden = false;
   await refreshAll();
 }
 
@@ -166,7 +171,13 @@ function rows(tableId, columns, data, onSelect, isSelected = null) {
     for (const col of columns) {
       const td = document.createElement("td");
       const value = col.render ? col.render(item) : item[col.key];
-      td.innerHTML = value == null ? "" : String(value);
+      td.textContent = value == null ? "" : String(value);
+      if ((col.key === "status" || col.key?.endsWith("_status")) && /^[a-z_]+$/.test(String(value))) {
+        const status = document.createElement("span");
+        status.className = `status-${value}`;
+        status.textContent = String(value);
+        td.replaceChildren(status);
+      }
       tr.appendChild(td);
     }
     tr.onkeydown = (event) => {
@@ -207,7 +218,7 @@ async function refreshVms() {
     { key: "name", label: "Name" },
     { key: "host", label: "Host" },
     { key: "username", label: "User" },
-    { key: "last_status", label: "Status", render: (x) => `<span class="status-${x.last_status}">${x.last_status}</span>` },
+    { key: "last_status", label: "Status", render: (x) => x.last_status },
     { key: "last_checked_at", label: "Checked" }
   ], data, (item) => {
     selectedVm = item.id;
@@ -236,9 +247,9 @@ async function refreshVmSetup() {
   rows("vmSetupTable", [
     { key: "vm_profile_id", label: "VM ID" },
     { key: "name", label: "Name" },
-    { key: "root_expand_status", label: "Root Disk", render: (x) => `<span class="status-${x.root_expand_status}">${x.root_expand_status}</span>` },
+    { key: "root_expand_status", label: "Root Disk", render: (x) => x.root_expand_status },
     { key: "root_usage_after", label: "Root Usage" },
-    { key: "vllm_status", label: "vLLM", render: (x) => `<span class="status-${x.vllm_status}">${x.vllm_status}</span>` },
+    { key: "vllm_status", label: "vLLM", render: (x) => x.vllm_status },
     { key: "vllm_version", label: "vLLM Version" },
     { key: "runtime_backend", label: "Platform" },
     { key: "cpu_vendor", label: "CPU vendor" },
@@ -246,7 +257,7 @@ async function refreshVmSetup() {
     { key: "torch_version", label: "PyTorch" },
     { key: "zentorch_version", label: "ZenTorch" },
     { key: "zendnn_version", label: "ZenDNN" },
-    { key: "benchmark_status", label: "GuideLLM", render: (x) => `<span class="status-${x.benchmark_status}">${x.benchmark_status}</span>` },
+    { key: "benchmark_status", label: "GuideLLM", render: (x) => x.benchmark_status },
     { key: "benchmark_version", label: "GuideLLM Version" },
     { key: "last_setup_at", label: "Updated" }
   ], data, null, (item) => item.vm_profile_id === selectedVm);
@@ -260,7 +271,7 @@ async function refreshAuthProfiles() {
     { key: "mode", label: "Mode" },
     { key: "profile_name", label: "Profile" },
     { key: "region", label: "Region" },
-    { key: "last_status", label: "Status", render: (x) => `<span class="status-${x.last_status}">${x.last_status}</span>` },
+    { key: "last_status", label: "Status", render: (x) => x.last_status },
     { key: "last_validated_at", label: "Validated" }
   ], data, (item) => {
     selectedAuthProfile = item.id;
@@ -412,7 +423,7 @@ function renderQueue(data) {
   rows("queueTable", [
     { key: "id", label: "ID" },
     { key: "job_type", label: "Type" },
-    { key: "status", label: "Status", render: (x) => `<span class="status-${x.status}">${x.status}</span>` },
+    { key: "status", label: "Status", render: (x) => x.status },
     { key: "created_at", label: "Created" },
     { key: "started_at", label: "Started" },
     { key: "finished_at", label: "Finished" },
@@ -1228,7 +1239,7 @@ $("captureTraceBtn").onclick = async () => {
 $("downloadTraceBtn").onclick = async () => {
   if (!selectedQueueJobId) return;
   try {
-    const response = await fetch(`/api/jobs/${selectedQueueJobId}/trace.zip`, {headers:{Authorization:`Bearer ${token}`}});
+    const response = await fetch(`/api/jobs/${selectedQueueJobId}/trace.zip`, {credentials:"same-origin"});
     if (!response.ok) throw new Error(await response.text());
     const url = URL.createObjectURL(await response.blob());
     const link = document.createElement("a"); link.href = url; link.download = `kernel-trace-${selectedQueueJobId}.zip`; link.click();
@@ -1294,7 +1305,7 @@ $("deleteJobBtn").onclick = async () => {
 
 function download(path) {
   if (!selectedBenchmarkJob) return toast("Select a successful benchmark job first");
-  window.open(`/api/reports/${selectedBenchmarkJob}${path}?token=${encodeURIComponent(token)}`, "_blank");
+  window.open(`/api/reports/${selectedBenchmarkJob}${path}`, "_blank");
 }
 
 $("downloadCsvBtn").onclick = () => download(".csv");
@@ -1309,7 +1320,7 @@ restoreAuthDraft();
 updateAuthMode();
 const savedTab = localStorage.getItem("activeWorkflowTab") || "auth";
 activateTab(document.getElementById(`tab-${savedTab}`) ? savedTab : "auth");
-ensureLocalSession().catch((e) => toast(e.message));
+ensureIamSession().catch((e) => toast(e.message));
 setInterval(() => { if (token) refreshJobs().catch(() => {}); }, 5000);
 setInterval(() => { if (token) quickCheckVms().catch(() => {}); }, 30000);
 

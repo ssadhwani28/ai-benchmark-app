@@ -49,7 +49,7 @@ function renderGeneratedCatalogue() {
       }));
       for (const [label, filename] of [['Download local ZIP', 'report.zip'], ['Download CSV', 'metrics.csv'], ['Download JSON', 'report.json']]) {
         actions.append(reportButton(label, async () => {
-          const response = await fetch(`/api/generated-reports/${report.id}/files/${filename}`, {headers:{Authorization:`Bearer ${token}`}});
+          const response = await fetch(`/api/generated-reports/${report.id}/files/${filename}`, {credentials:"same-origin"});
           if (!response.ok) throw new Error(await response.text());
           const url = URL.createObjectURL(await response.blob());
           const link = document.createElement('a'); link.href = url; link.download = `report-${report.id}-${filename}`;
@@ -101,7 +101,10 @@ async function refreshGeneratedReports() {
   if (!token || reportRefreshBusy) return;
   reportRefreshBusy = true;
   try {
-    const [sources, reports] = await Promise.all([api('/api/generated-reports/sources'), api('/api/generated-reports')]);
+    const [sources, reports, archive] = await Promise.all([api('/api/generated-reports/sources'), api('/api/generated-reports'), api('/api/report-archive/config')]);
+    $('reportArchiveConfiguration').textContent = archive.enabled
+      ? `Report archiving enabled · ${archive.bucket} · ${archive.region} · Download links expire after ${archive.link_hours} hours. Individual reports show their archive status below.`
+      : 'Report archiving is disabled. Reports are stored on this application only.';
     const catalogueChanged = JSON.stringify(reports) !== reportCatalogueSignature;
     reportCatalogueSignature = JSON.stringify(reports);
     generatedReportsCache = reports;

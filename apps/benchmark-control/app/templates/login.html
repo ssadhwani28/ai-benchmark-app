@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Sign in to your CPU inference benchmark workspace.">
+  <title>Sign in · CPU Benchmark</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/static/login.css">
+</head>
+<body>
+  <main class="login-shell">
+    <a class="brand" href="/login" aria-label="CPU Benchmark sign in">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M7 7h10v10H7zM9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/></svg></span>
+      <span>CPU Benchmark<small>INFERENCE WORKSPACE</small></span>
+    </a>
+    <section class="login-card" aria-labelledby="login-title">
+      <div class="lock-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg></div>
+      <p class="eyebrow">YOUR BENCHMARK WORKSPACE</p>
+      <h1 id="login-title">Sign in to get started.</h1>
+      <p class="intro">Configure your hosts, run inference benchmarks, and explore your results in one place.</p>
+      <p class="login-message" role="status">{{LOGIN_MESSAGE}}</p>
+      {{LOGIN_ACTION}}
+      <p class="login-help">Use your approved Oracle Cloud account. You’ll complete sign-in and any required verification with OCI IAM.</p>
+      <div class="card-footer"><span class="status-dot" aria-hidden="true"></span>Secure sign-in with Oracle Cloud</div>
+    </section>
+    <p class="page-footer">Built for CPU inference <span aria-hidden="true">·</span> OCI · vLLM · GuideLLM</p>
+  </main>
+</body>
+</html>

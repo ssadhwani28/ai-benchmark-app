@@ -139,6 +139,20 @@ CREATE TABLE IF NOT EXISTS audit_events (
   metadata TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS job_credentials (
+  job_id INTEGER PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+  owner_user_id INTEGER NOT NULL REFERENCES users(id),
+  encrypted_private_key TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oidc_identities (
+  issuer TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  PRIMARY KEY(issuer, subject)
+);
+CREATE TABLE IF NOT EXISTS security_migrations (
+  name TEXT PRIMARY KEY
+);
 """
 
 
@@ -179,6 +193,9 @@ class Database:
             self._ensure_column("vllm_profiles", "quantization", "TEXT NOT NULL DEFAULT 'none'")
             self._ensure_column("vllm_profiles", "model_revision", "TEXT")
             self._ensure_column("vllm_profiles", "encrypted_hf_token", "TEXT")
+            self._ensure_column("sessions", "expires_at", "INTEGER")
+            # Sessions cannot cross an authorization-policy mode change.
+            self._ensure_column("sessions", "authorization_mode", "TEXT NOT NULL DEFAULT 'subject_allowlist'")
             self._ensure_column("vllm_profiles", "cpu_kvcache_auto", "INTEGER NOT NULL DEFAULT 0")
 
     def _ensure_column(self, table: str, column: str, definition: str) -> None:
@@ -205,11 +222,58 @@ class Database:
             return [dict(row) for row in self.connect().execute(sql, params).fetchall()]
 
     def create_job(self, user_id: int, job_type: str, payload: dict[str, Any]) -> int:
+        if payload.get("ssh_private_key"):
+            raise ValueError("Private keys must be stored through create_provision_job")
         cur = self.execute(
             "INSERT INTO jobs(owner_user_id, job_type, status, payload) VALUES (?, ?, 'queued', ?)",
             (user_id, job_type, json.dumps(payload, separators=(",", ":"))),
         )
         return int(cur.lastrowid)
+
+    def create_provision_job(self, user_id: int, payload: dict[str, Any], encrypt) -> int:
+        safe_payload = dict(payload)
+        private_key = safe_payload.pop("ssh_private_key", None)
+        encrypted = encrypt(private_key)
+        with self._lock, self.connect() as con:
+            cur = con.execute(
+                "INSERT INTO jobs(owner_user_id, job_type, status, payload) VALUES (?, 'provision_vm', 'queued', ?)",
+                (user_id, json.dumps(safe_payload, separators=(",", ":"))),
+            )
+            job_id = int(cur.lastrowid)
+            if encrypted:
+                con.execute("INSERT INTO job_credentials(job_id,owner_user_id,encrypted_private_key) VALUES(?,?,?)",
+                            (job_id, user_id, encrypted))
+        return job_id
+
+    def migrate_provision_credentials(self, encrypt) -> None:
+        """Protect legacy queue entries before the worker can consume them.
+
+        This is logical cleanup; old backups and SQLite free pages may still
+        contain historical plaintext and require separate operator cleanup.
+        """
+        with self._lock, self.connect() as con:
+            for row in con.execute("SELECT id,owner_user_id,status,payload FROM jobs WHERE job_type='provision_vm'").fetchall():
+                payload = json.loads(row["payload"])
+                if "ssh_private_key" not in payload:
+                    continue
+                private_key = payload.pop("ssh_private_key")
+                if private_key and row["status"] == "queued":
+                    con.execute("INSERT OR REPLACE INTO job_credentials(job_id,owner_user_id,encrypted_private_key) VALUES(?,?,?)",
+                                (row["id"], row["owner_user_id"], encrypt(private_key)))
+                con.execute("UPDATE jobs SET payload=? WHERE id=?",
+                            (json.dumps(payload, separators=(",", ":")), row["id"]))
+            con.execute("DELETE FROM job_credentials WHERE job_id IN (SELECT id FROM jobs WHERE status NOT IN ('queued','running'))")
+
+    def provision_private_key(self, job_id: int, user_id: int, decrypt) -> str:
+        row = self.one("SELECT encrypted_private_key FROM job_credentials WHERE job_id=? AND owner_user_id=?",
+                       (job_id, user_id))
+        return (decrypt(row["encrypted_private_key"]) or "") if row else ""
+
+    def revoke_legacy_sessions(self) -> None:
+        with self._lock, self.connect() as con:
+            if not con.execute("SELECT 1 FROM security_migrations WHERE name='iam-only-auth'").fetchone():
+                con.execute("DELETE FROM sessions")
+                con.execute("INSERT INTO security_migrations(name) VALUES('iam-only-auth')")
 
     def audit(self, user_id: int, event_type: str, entity_type: str, entity_id: int | None, metadata: dict[str, Any] | None = None) -> None:
         self.execute(

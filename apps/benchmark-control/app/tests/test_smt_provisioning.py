@@ -1,4 +1,5 @@
 """Exercise real OCI models with simulated service responses; never launch VMs."""
+from app.tests.security_fixtures import add_session, iam_settings
 import importlib
 import json
 import os
@@ -94,12 +95,12 @@ class SmtProvisioningTests(unittest.TestCase):
             db = Database(Path(tmp) / 'test.db')
             db.init()
             db.execute("INSERT INTO users(id,email,password_hash) VALUES(1,'smt@test','unused')")
-            db.execute("INSERT INTO sessions(token,user_id) VALUES('session',1)")
+            add_session(db, 1, "session")
             payload = self.payload()
             payload.pop('_job_id')
             from fastapi.testclient import TestClient
             try:
-                with patch.object(api, 'db', db):
+                with patch.multiple(api, db=db, settings=iam_settings(Path(tmp))):
                     client = TestClient(api.app)
                     try:
                         response = client.post('/api/oci/instances', json=payload, headers={'Authorization': 'Bearer session'})

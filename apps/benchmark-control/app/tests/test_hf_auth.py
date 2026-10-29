@@ -1,4 +1,5 @@
 """HF credentials stay out of profile snapshots, SSH argv and API responses."""
+from app.tests.security_fixtures import add_session, iam_settings
 import importlib
 import json
 import os
@@ -39,13 +40,13 @@ class HfAuthTests(unittest.TestCase):
         self.addCleanup(lambda:self.db.connect().close())
         for uid in [1,2]:
             self.db.execute('INSERT INTO users(id,email,password_hash) VALUES(?,?,?)',(uid,f'{uid}@test','unused'))
-            self.db.execute('INSERT INTO sessions(token,user_id) VALUES(?,?)',(f'session-{uid}',uid))
+            add_session(self.db, uid, f'session-{uid}')
         self.box = SecretBox('hf-test-secret-long-enough-123456')
         self.worker = Worker(self.db,self.box)
-        self.patcher = patch.multiple(self.api,db=self.db,secret_box=self.box)
+        self.patcher = patch.multiple(self.api,db=self.db,secret_box=self.box,settings=iam_settings(Path(self.temp.name)))
         self.patcher.start(); self.addCleanup(self.patcher.stop)
         from fastapi.testclient import TestClient
-        self.client = TestClient(self.api.app); self.addCleanup(self.client.close)
+        self.client = TestClient(self.api.app, base_url="https://testserver"); self.addCleanup(self.client.close)
         self.headers = {'Authorization':'Bearer session-1'}
 
     def profile(self, **kwargs):
